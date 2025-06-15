@@ -27,10 +27,11 @@ local function spawnParkedVehicles(parkId, vehicles)
                 plate = vehicle.plate,
                 owner = vehicle.citizenid,
                 model = vehicle.model,
-                mods = vehicle.mods,
+                mods = vehicle.mods, -- Đây vẫn là chuỗi JSON từ DB
                 spotId = vehicle.spot_id
             }
 
+            -- Đảm bảo giải mã JSON khi lấy từ DB
             QBCore.Functions.SetVehicleProperties(vehEntity, json.decode(vehicle.mods))
             SetModelAsNoLongerNeeded(model)
             SetVehicleOnGroundProperly(vehEntity)
@@ -223,10 +224,10 @@ RegisterNetEvent('personalparking:client:tryParkVehicle', function()
                         local vehicleData = {
                             plate = plate,
                             model = modelName,
-                            mods = vehicleProps
+                            mods = vehicleProps -- Đây là một table
                         }
                         TriggerServerEvent('personalparking:server:parkVehicle', CurrentParkZone, freeSpot, vehicleData)
-                        QBCore.Functions.DeleteVehicle(vehicle)
+                        -- Xe gốc sẽ được xóa sau khi xe mới được spawn bởi sự kiện vehicleParkedSuccess
                     end
                 end, plate)
             else
@@ -257,9 +258,69 @@ RegisterNetEvent('personalparking:client:spawnRetrievedVehicle', function(vehDat
         SetVehicleFuelLevel(veh, 100)
         TriggerEvent('vehiclekeys:client:SetOwner', GetVehicleNumberPlateText(veh))
         SetVehicleEngineOn(veh, true, true)
+        -- Khi lấy xe ra từ DB, mods là chuỗi JSON, cần giải mã
         QBCore.Functions.SetVehicleProperties(veh, json.decode(vehData.mods))
     end, vehData.model, spawnPoint, true)
 end)
+
+-- Sự kiện mới để xử lý việc xe được đậu thành công và hiển thị trên client
+RegisterNetEvent('personalparking:client:vehicleParkedSuccess', function(parkId, spotId, vehicleData)
+    local spots = Config.Zones[parkId].VehicleSpots
+    local spot = spots[spotId]
+    if spot then
+        local model = GetHashKey(vehicleData.model)
+        RequestModel(model)
+        while not HasModelLoaded(model) do
+            Wait(0)
+        end
+
+        local vehEntity = CreateVehicle(model, spot.x, spot.y, spot.z, false, false)
+        SetEntityHeading(vehEntity, spot.w)
+        
+        -- Lưu thông tin xe đã đậu vào bảng ParkedVehicles cục bộ
+        if not ParkedVehicles[parkId] then ParkedVehicles[parkId] = {} end
+        ParkedVehicles[parkId][vehicleData.plate] = {
+            car = vehEntity,
+            plate = vehicleData.plate,
+            owner = QBCore.Functions.GetPlayerData().citizenid, -- Lấy citizenid của người chơi hiện tại
+            model = vehicleData.model,
+            mods = vehicleData.mods, -- mods đã là table từ client, không cần json.decode
+            spotId = spotId
+        }
+
+        -- Khi nhận từ server (sau khi được gửi từ client lên server), mods đã là table
+        QBCore.Functions.SetVehicleProperties(vehEntity, vehicleData.mods)
+        SetModelAsNoLongerNeeded(model)
+        SetVehicleOnGroundProperly(vehEntity)
+        SetEntityInvincible(vehEntity, true)
+        SetVehicleDoorsLocked(vehEntity, 3)
+        FreezeEntityPosition(vehEntity, true)
+
+        -- Xóa xe mà người chơi đang lái (xe gốc)
+        local ped = PlayerPedId()
+        local originalVehicle = GetVehiclePedIsIn(ped, false)
+        if originalVehicle and DoesEntityExist(originalVehicle) then
+            QBCore.Functions.DeleteVehicle(originalVehicle)
+        end
+
+        if Config.UseTarget then
+            EntityZones[vehEntity] = exports['qb-target']:AddTargetEntity(vehEntity, {
+                options = {
+                    {
+                        type = 'client',
+                        event = 'personalparking:client:tryRetrieveVehicle',
+                        icon = 'fas fa-car-side',
+                        label = 'Lấy Xe',
+                        owner = QBCore.Functions.GetPlayerData().citizenid, -- Lấy citizenid của người chơi hiện tại
+                        plate = vehicleData.plate,
+                    }
+                },
+                distance = 2.5
+            })
+        end
+    end
+end)
+
 
 RegisterNetEvent('personalparking:client:refreshVehicles', function(parkId)
     if CurrentParkZone and CurrentParkZone == parkId then

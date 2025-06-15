@@ -44,9 +44,13 @@ RegisterNetEvent('personalparking:server:parkVehicle', function(parkId, spotId, 
                 parkId,
                 spotId
             })
+
+            -- Kích hoạt sự kiện trên client để hiển thị xe đã đậu
+            TriggerClientEvent('personalparking:client:vehicleParkedSuccess', src, parkId, spotId, vehicleData)
+
             TriggerClientEvent('QBCore:Notify', src, 'Bạn đã đậu xe với phí là $'..parkFee, 'success')
             TriggerEvent('qb-log:server:CreateLog', 'personalparking', 'Vehicle Parked', 'green', '**'..Player.PlayerData.name..'** đã đậu xe **'..vehicleData.model..'** (`'..vehicleData.plate..'`) tại **'..parkId..'** với phí $'..parkFee..'.')
-            TriggerClientEvent('personalparking:client:refreshVehicles', -1, parkId)
+            -- TriggerClientEvent('personalparking:client:refreshVehicles', -1, parkId) -- Không cần refresh toàn bộ nếu chỉ spawn 1 xe
         else
             -- Nếu việc xóa xe khỏi player_vehicles thất bại, hoàn lại tiền cho người chơi
             Player.Functions.AddMoney('bank', parkFee, 'parking-fee-refund')

@@ -1,6 +1,6 @@
 Config = Config or {}
 
-Config.UseTarget = GetConvar('UseTarget', 'false') == 'true' -- or true if you prefer qb-target
+Config.UseTarget = GetConvar('UseTarget', 'false') == 'false' -- or true if you prefer qb-target
 
 Config.Zones = {
     ["SandyParking"] = {
