@@ -46,7 +46,7 @@ RegisterNetEvent('personalparking:server:parkVehicle', function(parkId, spotId, 
             })
 
             -- Kích hoạt sự kiện trên client để hiển thị xe đã đậu
-            TriggerClientEvent('personalparking:client:vehicleParkedSuccess', src, parkId, spotId, vehicleData)
+            TriggerClientEvent('personalparking:client:vehicleParkedSuccess', src, parkId, spotId, vehicleData, Player.PlayerData.citizenid) -- Truyền thêm citizenid
 
             TriggerClientEvent('QBCore:Notify', src, 'Bạn đã đậu xe với phí là $'..parkFee, 'success')
             TriggerEvent('qb-log:server:CreateLog', 'personalparking', 'Vehicle Parked', 'green', '**'..Player.PlayerData.name..'** đã đậu xe **'..vehicleData.model..'** (`'..vehicleData.plate..'`) tại **'..parkId..'** với phí $'..parkFee..'.')

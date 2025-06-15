@@ -3,6 +3,7 @@ local CurrentParkZone = nil
 local ActiveZones = {}
 local EntityZones = {}
 local ParkedVehicles = {}
+local CreatedPolyZones = {}
 
 -- Functions
 local function spawnParkedVehicles(parkId, vehicles)
@@ -27,11 +28,10 @@ local function spawnParkedVehicles(parkId, vehicles)
                 plate = vehicle.plate,
                 owner = vehicle.citizenid,
                 model = vehicle.model,
-                mods = vehicle.mods, -- Đây vẫn là chuỗi JSON từ DB
+                mods = vehicle.mods,
                 spotId = vehicle.spot_id
             }
 
-            -- Đảm bảo giải mã JSON khi lấy từ DB
             QBCore.Functions.SetVehicleProperties(vehEntity, json.decode(vehicle.mods))
             SetModelAsNoLongerNeeded(model)
             SetVehicleOnGroundProperly(vehEntity)
@@ -76,6 +76,8 @@ end
 local function getFreeSpot(parkId)
     local spots = Config.Zones[parkId].VehicleSpots
     local parkedSpots = {}
+    local availableSpotIndices = {}
+    
     if ParkedVehicles[parkId] then
         for _, vehicle in pairs(ParkedVehicles[parkId]) do
             parkedSpots[vehicle.spotId] = true
@@ -84,10 +86,16 @@ local function getFreeSpot(parkId)
 
     for i = 1, #spots do
         if not parkedSpots[i] then
-            return i -- Trả về chỉ số của vị trí trống đầu tiên
+            table.insert(availableSpotIndices, i)
         end
     end
-    return nil -- Không còn chỗ trống
+
+    if #availableSpotIndices > 0 then
+        local randomIndex = math.random(1, #availableSpotIndices)
+        return availableSpotIndices[randomIndex]
+    end
+
+    return nil
 end
 
 -- Main Zone Functions
@@ -95,16 +103,14 @@ local function CreateZones()
     local isNearParkingMarker = {}
 
     for parkId, zoneData in pairs(Config.Zones) do
-        isNearParkingMarker[parkId] = false
-
-        -- Polyzone lớn để quản lý việc hiển thị/biến mất của các xe
         local pZone = PolyZone:Create(zoneData.PolyZone, {
             name = parkId,
             minZ = zoneData.MinZ,
             maxZ = zoneData.MaxZ,
             debugPoly = false
         })
-
+        CreatedPolyZones[parkId] = pZone
+        
         pZone:onPlayerInOut(function(isPointInside)
             if isPointInside then
                 CurrentParkZone = parkId
@@ -131,7 +137,7 @@ local function CreateZones()
                     while isNearParkingMarker[parkId] do
                         local playerPed = PlayerPedId()
                         if IsPedInAnyVehicle(playerPed, false) then
-                            exports['qb-core']:DrawText('[E] - Đậu Xe', 'left')
+                            exports['qb-core']:DrawText(Lang:t('info.park_prompt'), 'left')
                             if IsControlJustReleased(0, 38) then -- Phím E
                                 TriggerEvent('personalparking:client:tryParkVehicle')
                             end
@@ -178,7 +184,7 @@ local function CreateZones()
                                 end
 
                                 if parkedCarData then
-                                    exports['qb-core']:DrawText('[E] - Lấy Xe', 'left')
+                                    exports['qb-core']:DrawText(Lang:t('info.retrieve_prompt'), 'left')
                                     if IsControlJustReleased(0, 38) then -- Phím E
                                         -- Tạo dữ liệu giống như qb-target sẽ gửi
                                         local targetData = {
@@ -205,11 +211,14 @@ end
 
 -- Events
 RegisterNetEvent('personalparking:client:tryParkVehicle', function()
-    if not CurrentParkZone then return end
+    if not CurrentParkZone then
+        QBCore.Functions.Notify(Lang:t('error.cannot_park_no_zone'), 'error')
+        return
+    end
     local ped = PlayerPedId()
     local vehicle = GetVehiclePedIsIn(ped, false)
     if not vehicle then
-        QBCore.Functions.Notify('Bạn cần ở trong một phương tiện.', 'error')
+        QBCore.Functions.Notify(Lang:t('error.not_in_vehicle'), 'error')
         return
     end
 
@@ -224,27 +233,36 @@ RegisterNetEvent('personalparking:client:tryParkVehicle', function()
                         local vehicleData = {
                             plate = plate,
                             model = modelName,
-                            mods = vehicleProps -- Đây là một table
+                            mods = vehicleProps
                         }
                         TriggerServerEvent('personalparking:server:parkVehicle', CurrentParkZone, freeSpot, vehicleData)
-                        -- Xe gốc sẽ được xóa sau khi xe mới được spawn bởi sự kiện vehicleParkedSuccess
+                        
+                        if DoesEntityExist(vehicle) then
+                            QBCore.Functions.DeleteVehicle(vehicle)
+                        end
+                        TaskLeaveVehicle(ped, vehicle, 16)
                     end
                 end, plate)
             else
-                QBCore.Functions.Notify('Không còn chỗ trống trong bãi đậu xe này.', 'error')
+                QBCore.Functions.Notify(Lang:t('error.no_free_spots'), 'error')
             end
         else
-            QBCore.Functions.Notify('Đây không phải là xe của bạn.', 'error')
+            QBCore.Functions.Notify(Lang:t('error.not_your_vehicle'), 'error')
         end
     end, plate)
 end)
 
 RegisterNetEvent('personalparking:client:tryRetrieveVehicle', function(data)
     local pData = QBCore.Functions.GetPlayerData()
+    if not CurrentParkZone then
+        QBCore.Functions.Notify(Lang:t('error.cannot_retrieve_no_zone'), 'error')
+        return
+    end
+
     if pData.citizenid == data.owner then
         TriggerServerEvent('personalparking:server:retrieveVehicle', CurrentParkZone, data.plate)
     else
-        QBCore.Functions.Notify('Đây không phải xe của bạn.', 'error')
+        QBCore.Functions.Notify(Lang:t('error.not_your_vehicle'), 'error')
     end
 end)
 
@@ -258,13 +276,11 @@ RegisterNetEvent('personalparking:client:spawnRetrievedVehicle', function(vehDat
         SetVehicleFuelLevel(veh, 100)
         TriggerEvent('vehiclekeys:client:SetOwner', GetVehicleNumberPlateText(veh))
         SetVehicleEngineOn(veh, true, true)
-        -- Khi lấy xe ra từ DB, mods là chuỗi JSON, cần giải mã
         QBCore.Functions.SetVehicleProperties(veh, json.decode(vehData.mods))
     end, vehData.model, spawnPoint, true)
 end)
 
--- Sự kiện mới để xử lý việc xe được đậu thành công và hiển thị trên client
-RegisterNetEvent('personalparking:client:vehicleParkedSuccess', function(parkId, spotId, vehicleData)
+RegisterNetEvent('personalparking:client:vehicleParkedSuccess', function(parkId, spotId, vehicleData, citizenid)
     local spots = Config.Zones[parkId].VehicleSpots
     local spot = spots[spotId]
     if spot then
@@ -277,31 +293,22 @@ RegisterNetEvent('personalparking:client:vehicleParkedSuccess', function(parkId,
         local vehEntity = CreateVehicle(model, spot.x, spot.y, spot.z, false, false)
         SetEntityHeading(vehEntity, spot.w)
         
-        -- Lưu thông tin xe đã đậu vào bảng ParkedVehicles cục bộ
         if not ParkedVehicles[parkId] then ParkedVehicles[parkId] = {} end
         ParkedVehicles[parkId][vehicleData.plate] = {
             car = vehEntity,
             plate = vehicleData.plate,
-            owner = QBCore.Functions.GetPlayerData().citizenid, -- Lấy citizenid của người chơi hiện tại
+            owner = citizenid,
             model = vehicleData.model,
-            mods = vehicleData.mods, -- mods đã là table từ client, không cần json.decode
+            mods = vehicleData.mods,
             spotId = spotId
         }
 
-        -- Khi nhận từ server (sau khi được gửi từ client lên server), mods đã là table
         QBCore.Functions.SetVehicleProperties(vehEntity, vehicleData.mods)
         SetModelAsNoLongerNeeded(model)
-        SetVehicleOnGroundProperly(vehEntity)
         SetEntityInvincible(vehEntity, true)
         SetVehicleDoorsLocked(vehEntity, 3)
         FreezeEntityPosition(vehEntity, true)
-
-        -- Xóa xe mà người chơi đang lái (xe gốc)
-        local ped = PlayerPedId()
-        local originalVehicle = GetVehiclePedIsIn(ped, false)
-        if originalVehicle and DoesEntityExist(originalVehicle) then
-            QBCore.Functions.DeleteVehicle(originalVehicle)
-        end
+        SetVehicleOnGroundProperly(vehEntity)
 
         if Config.UseTarget then
             EntityZones[vehEntity] = exports['qb-target']:AddTargetEntity(vehEntity, {
@@ -311,7 +318,7 @@ RegisterNetEvent('personalparking:client:vehicleParkedSuccess', function(parkId,
                         event = 'personalparking:client:tryRetrieveVehicle',
                         icon = 'fas fa-car-side',
                         label = 'Lấy Xe',
-                        owner = QBCore.Functions.GetPlayerData().citizenid, -- Lấy citizenid của người chơi hiện tại
+                        owner = citizenid,
                         plate = vehicleData.plate,
                     }
                 },
@@ -331,26 +338,79 @@ RegisterNetEvent('personalparking:client:refreshVehicles', function(parkId)
     end
 end)
 
--- Threads and resource management
+-- Marker Parameters (có thể điều chỉnh)
+local MarkerType = 1        -- Loại marker (1 là hình giọt nước ngược)
+local MarkerScale = 1.0     -- Kích thước marker
+local MarkerColorR = 255    -- Màu đỏ
+local MarkerColorG = 0      -- Màu xanh lá
+local MarkerColorB = 0      -- Màu xanh dương
+local MarkerColorA = 150    -- Độ trong suốt (0-255)
+
+-- Luồng mới để vẽ marker
 CreateThread(function()
-    for parkId, zoneData in pairs(Config.Zones) do
-        local blip = AddBlipForCoord(zoneData.ParkVehicleZone.x, zoneData.ParkVehicleZone.y, zoneData.ParkVehicleZone.z)
-        SetBlipSprite(blip, 357) -- Parking blip sprite
-        SetBlipDisplay(blip, 4)
-        SetBlipScale(blip, 0.7)
-        SetBlipAsShortRange(blip, true)
-        SetBlipColour(blip, 2)
-        BeginTextCommandSetBlipName('STRING')
-        AddTextComponentSubstringPlayerName('Bãi Đậu Xe Cá Nhân')
-        EndTextCommandSetBlipName(blip)
+    while true do
+        Wait(0) -- Vẽ liên tục để marker hiển thị
+        local playerCoords = GetEntityCoords(PlayerPedId())
+        for parkId, zoneData in pairs(Config.Zones) do
+            local markerCoords = zoneData.ParkVehicleZone
+            local dist = #(playerCoords - vec3(markerCoords.x, markerCoords.y, markerCoords.z))
+
+            if dist < 50.0 then -- Chỉ vẽ nếu người chơi ở đủ gần để tiết kiệm tài nguyên
+                DrawMarker(
+                    MarkerType,
+                    markerCoords.x,
+                    markerCoords.y,
+                    markerCoords.z - 0.9, -- Điều chỉnh trục Z nếu marker bị chìm hoặc lơ lửng
+                    0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0,
+                    MarkerScale, MarkerScale, MarkerScale,
+                    MarkerColorR, MarkerColorG, MarkerColorB, MarkerColorA,
+                    false, -- bobUpAndDown (nhấp nhô)
+                    true,  -- faceCamera (luôn quay về phía camera)
+                    2,     -- P19 (thông số bổ sung, thường là 2 hoặc false)
+                    true,  -- rotate (xoay)
+                    nil,   -- textureDict
+                    nil,   -- textureName
+                    false  -- drawOnEnts
+                )
+            end
+        end
     end
 end)
 
+
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() == resourceName then
-        CreateZones()
+        -- CreateZones() được gọi trực tiếp ở cuối file để đảm bảo nó chạy sớm nhất
     end
 end)
+
+-- Kích hoạt logic sinh xe khi người chơi đã tải hoàn chỉnh
+AddEventHandler('QBCore:Client:OnPlayerLoaded', function()
+    CreateThread(function()
+        Wait(1000) -- Đợi 1 giây để đảm bảo mọi thứ đã khởi tạo
+        local playerCoords = GetEntityCoords(PlayerPedId())
+        
+        local foundZone = false
+        for parkId, zoneData in pairs(Config.Zones) do
+            local pZone = CreatedPolyZones[parkId]
+            if pZone then
+                if pZone:isPointInside(playerCoords) then
+                    foundZone = true
+                    CurrentParkZone = parkId
+                    QBCore.Functions.TriggerCallback('personalparking:server:getParkedVehicles', function(vehicles)
+                        if vehicles then
+                            despawnParkedVehicles(CurrentParkZone)
+                            spawnParkedVehicles(CurrentParkZone, vehicles)
+                        end
+                    end, CurrentParkZone)
+                    break
+                end
+            end
+        end
+    end)
+end)
+
 
 AddEventHandler('onResourceStop', function(resourceName)
     if GetCurrentResourceName() == resourceName then
@@ -359,3 +419,6 @@ AddEventHandler('onResourceStop', function(resourceName)
         end
     end
 end)
+
+-- GỌI HÀM CREATEZONES TRỰC TIẾP Ở CUỐI FILE ĐỂ ĐẢM BẢO NÓ CHẠY SỚM NHẤT
+CreateZones()
